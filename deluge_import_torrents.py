@@ -8,7 +8,6 @@ import subprocess
 import sys
 
 from deluge_client import DelugeRPCClient
-import libtorrent
 
 def pretty(d, indent=0):
     for key, value in d.items():
@@ -18,20 +17,13 @@ def pretty(d, indent=0):
         else:
             print('\t' * (indent+1) + str(value))
 
-def get_torrent_info_hash(torrent_file_path):
-    e = libtorrent.bdecode(open(torrent_file_path, 'rb').read())
-    info = libtorrent.torrent_info(e)
-    info_hash = info.info_hash()
-    return str(info_hash).encode('utf-8')
-
 def deluge_connect(host, port, username, password):
     client = DelugeRPCClient(host, port, username, password)
     client.connect()
     assert client.connected
     return client
 
-def check_already_added(client, torrent_file_path):
-    info_hash = get_torrent_info_hash(torrent_file_path)
+def check_already_added(client, info_hash):
     status_existing = client.call('core.get_torrents_status', {'id': info_hash}, ['name', 'save_path'])
     print(status_existing)
     print("Checking if hash is added: {}".format(repr(info_hash)))
@@ -71,20 +63,20 @@ def locate_file(filename):
     print("locate results: {}".format(results))
     return results
 
-def get_torrent_info(torrent_file_path):
+def get_torrent_data(torrent_file_path):
     torrent_info_command = ['torrent-info', torrent_file_path]
     print(torrent_info_command)
     process = subprocess.Popen(torrent_info_command, stdout=subprocess.PIPE)
     output, error = process.communicate()
     assert error is None
     output_str = str(output, 'utf-8')
-    torrent_info = json.loads(output_str)
-    return torrent_info
+    torrent_data = json.loads(output_str)
+    return torrent_data
 
 def get_file_names_to_search_for(torrent_info):
-    torrent_files = torrent_info['info']['files']
+    torrent_files = torrent_info['files']
     if torrent_files is None:
-        return [torrent_info['info']['name']]
+        return [torrent_info['name']]
 
     # TODO: Search deeper
     i = 1
@@ -95,13 +87,13 @@ def get_file_names_to_search_for(torrent_info):
     return paths
 
 def get_torrent_location_data(torrent_info, filedir):
-    if torrent_info['info']['files'] is None:
+    if torrent_info['files'] is None:
         # Torrent is single file
         return (filedir, None, None)
 
     download_location = os.path.dirname(filedir)
     torrent_dirname = os.path.basename(filedir)
-    torrent_old_dirname = torrent_info['info']['name']
+    torrent_old_dirname = torrent_info['name']
     if torrent_dirname == torrent_old_dirname:
         # No need to rename
         return (download_location, None, None)
@@ -110,11 +102,13 @@ def get_torrent_location_data(torrent_info, filedir):
 
 def do_work(deluge_host, deluge_port, deluge_username, deluge_password, torrent_file_path):
     client = deluge_connect(deluge_host, deluge_port, deluge_username, deluge_password)
-    if check_already_added(client, torrent_file_path):
+    torrent_data = get_torrent_data(torrent_file_path)
+    torrent_info = torrent_data['torrent']['info']
+    torrent_info_hash = torrent_data['info_hash']
+    if check_already_added(client, torrent_info_hash):
         print("Already added: {}".format(torrent_file_path))
         return
 
-    torrent_info = get_torrent_info(torrent_file_path)
     print(json.dumps(torrent_info, indent=4))
     file_names_to_search_for = get_file_names_to_search_for(torrent_info)
     for file_name_to_search_for in file_names_to_search_for:
